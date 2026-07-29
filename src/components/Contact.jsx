@@ -3,23 +3,91 @@ import { motion } from 'framer-motion'
 import { HiOutlineEnvelope, HiOutlinePhone, HiOutlinePaperAirplane } from 'react-icons/hi2'
 import { HiOutlineArrowDown, HiOutlineExclamationCircle } from 'react-icons/hi'
 
+// Domain typos map
+const TYPO_DOMAINS = {
+  'gmai.com': 'gmail.com',
+  'gmial.com': 'gmail.com',
+  'gmil.com': 'gmail.com',
+  'gmaill.com': 'gmail.com',
+  'gmai.co': 'gmail.com',
+  'yaho.com': 'yahoo.com',
+  'yaho.co': 'yahoo.com',
+  'ymail.co': 'yahoo.com',
+  'hotmial.com': 'hotmail.com',
+  'hotmai.com': 'hotmail.com',
+  'outloo.com': 'outlook.com',
+  'outlok.com': 'outlook.com',
+  'iclou.com': 'icloud.com',
+}
+
+const DISPOSABLE_DOMAINS = [
+  'test.com',
+  'example.com',
+  'mailinator.com',
+  'tempmail.com',
+  '10minutemail.com',
+  'yopmail.com',
+  'guerrillamail.com',
+  'dispostable.com',
+  'trashmail.com',
+]
+
 export default function Contact() {
   const [status, setStatus] = useState('idle') // 'idle' | 'sending' | 'sent' | 'error'
   const [emailError, setEmailError] = useState('')
   const [emailVal, setEmailVal] = useState('')
   const [serverError, setServerError] = useState('')
 
-  const isValidEmail = (email) => {
-    // Regex checking standard format username@domain.tld
+  const isValidEmailFormat = (email) => {
     const re = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
     return re.test(String(email).trim().toLowerCase())
+  }
+
+  const verifyEmailDomain = async (email) => {
+    const trimmed = String(email).trim().toLowerCase()
+    if (!isValidEmailFormat(trimmed)) {
+      return { valid: false, reason: 'Please enter a valid email format (e.g. name@domain.com)' }
+    }
+
+    const parts = trimmed.split('@')
+    const username = parts[0]
+    const domain = parts[1]
+
+    // 1. Check common typos
+    if (TYPO_DOMAINS[domain]) {
+      const suggested = `${username}@${TYPO_DOMAINS[domain]}`
+      return { valid: false, reason: `Did you mean ${suggested}?` }
+    }
+
+    // 2. Check disposable / test domains
+    if (DISPOSABLE_DOMAINS.includes(domain)) {
+      return { valid: false, reason: 'Please enter a valid personal or work email address.' }
+    }
+
+    // 3. Real-time DNS MX record check via Google DNS over HTTPS
+    try {
+      const response = await fetch(`https://dns.google/resolve?name=${domain}&type=MX`)
+      if (response.ok) {
+        const data = await response.json()
+        if (data.Status !== 0 || !data.Answer || data.Answer.length === 0) {
+          return {
+            valid: false,
+            reason: `The domain "@${domain}" does not have active mail servers. Please enter a correct email.`,
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('DNS MX check failed, proceeding with format check:', e)
+    }
+
+    return { valid: true }
   }
 
   const handleEmailChange = (e) => {
     const val = e.target.value
     setEmailVal(val)
     if (emailError) {
-      if (isValidEmail(val)) {
+      if (isValidEmailFormat(val)) {
         setEmailError('')
       }
     }
@@ -33,18 +101,26 @@ export default function Contact() {
     const form = e.target
     const formData = new FormData(form)
     const email = formData.get('email')
+    const name = formData.get('name')
 
-    if (!isValidEmail(email)) {
-      setEmailError('Please enter a valid email address (e.g. name@domain.com)')
+    setStatus('sending')
+
+    // Perform thorough email validation (syntax, typos, MX record check)
+    const verification = await verifyEmailDomain(email)
+    if (!verification.valid) {
+      setEmailError(verification.reason)
+      setStatus('idle')
       return
     }
 
-    setStatus('sending')
     const accessKey = import.meta.env.VITE_WEB3FORMS_KEY || ''
 
     if (accessKey) {
       try {
         formData.append('access_key', accessKey)
+        formData.append('subject', `New Contact Message from ${name}`)
+        formData.append('from_name', name)
+
         const response = await fetch('https://api.web3forms.com/submit', {
           method: 'POST',
           body: formData,
@@ -57,7 +133,9 @@ export default function Contact() {
           setTimeout(() => setStatus('idle'), 4000)
           return
         } else {
-          setServerError(data.message || 'Failed to send email. Please check your email and try again.')
+          setServerError(
+            data.message || 'Failed to send message. Please check your email details and try again.'
+          )
           setStatus('error')
           return
         }
@@ -70,7 +148,6 @@ export default function Contact() {
     }
 
     // Mailto fallback if no accessKey is configured
-    const name = formData.get('name')
     const message = formData.get('message')
     window.location.href = `mailto:bibhupbaliarsingh@gmail.com?subject=Portfolio%20Contact%20from%20${encodeURIComponent(
       name
@@ -158,10 +235,14 @@ export default function Contact() {
                         : 'border-[#aaaaaa] focus:border-[#00c9ff]'
                     }`}
                   />
-                  {emailError && (
+                  {emailError ? (
                     <span className="text-red-500 text-xs font-medium flex items-center gap-1 mt-1.5">
                       <HiOutlineExclamationCircle className="shrink-0 text-sm" />
                       {emailError}
+                    </span>
+                  ) : (
+                    <span className="text-[#888888] text-xs font-normal block mt-1 px-1">
+                      Please enter your correct, active email address so I can reply back to you.
                     </span>
                   )}
                 </div>
@@ -190,7 +271,7 @@ export default function Contact() {
                 >
                   <span>
                     {status === 'sending'
-                      ? 'Sending...'
+                      ? 'Validating & Sending...'
                       : status === 'sent'
                       ? 'Sent!'
                       : 'Send'}
